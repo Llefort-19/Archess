@@ -1,22 +1,22 @@
 # Archess
 
-A modern browser-based version of Archon, combining turn-based strategy with real-time arcade battles.
+A modern browser-based chess-inspired strategy game with a turn-based gameplay experience.
 
 ## Project Structure
 
 ```
 archess/
-├── client/           # React-based frontend
-├── server/           # Node.js/Express backend
+├── client/           # React-based frontend using Vite
+├── server/           # Node.js backend with Socket.IO
 └── shared/           # Shared types and interfaces
 ```
 
 ## Features
 
-- Grid-based board with fantasy-themed units
-- Turn-based movement and strategy
-- Real-time arcade battles when units meet
-- WebSocket-based real-time updates
+- Grid-based board with strategic gameplay
+- Turn-based movement system
+- Real-time multiplayer using WebSockets
+- Game lobbies for match creation and joining
 - Modern React frontend with TypeScript
 - Authoritative server architecture
 
@@ -40,14 +40,21 @@ cd archess
 npm install
 ```
 
-3. Start the development servers:
+### Running the Development Servers
+
+Start the client development server:
 ```bash
+cd client
 npm run dev
 ```
 
-This will start both the client (port 3000) and server (port 4000) in development mode.
+Start the server development server:
+```bash
+cd server
+npm run dev
+```
 
-### Development
+### Development URLs
 
 - Client: http://localhost:3000
 - Server: http://localhost:4000
@@ -64,29 +71,24 @@ This will start both the client (port 3000) and server (port 4000) in developmen
 - Express for REST API
 - Socket.IO for real-time updates
 - TypeScript for type safety
-- Modular architecture with clear interfaces
+- Modular architecture with services:
+  - GameManager: Handles game state and logic
+  - LobbyManager: Manages game lobbies and matchmaking
 
 ### Shared
 - Common types and interfaces
 - Shared game logic
 - Type definitions
 
-## Testing
-
-Run tests for all packages:
-```bash
-npm test
-```
-
-Run tests for specific package:
-```bash
-npm test --workspace=@archess/client
-npm test --workspace=@archess/server
-```
-
 ## Building for Production
 
 ```bash
+# Build the client
+cd client
+npm run build
+
+# Build the server
+cd server
 npm run build
 ```
 
