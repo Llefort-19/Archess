@@ -185,7 +185,15 @@ class NetworkManager implements INetworkManager {
         clearTimeout(timeout);
         this.socket?.off('gameStateUpdate', successListener);
         this.socket?.off('actionError', errorListener);
-        reject(new Error(error.message || 'Unknown error'));
+        
+        // Pass along the error code if it exists
+        if (error.code) {
+          const customError = new Error(error.message || 'Unknown error');
+          (customError as any).code = error.code;
+          reject(customError);
+        } else {
+          reject(new Error(error.message || 'Unknown error'));
+        }
       };
       
       // Listen for success and error events
@@ -198,7 +206,15 @@ class NetworkManager implements INetworkManager {
           clearTimeout(timeout);
           this.socket?.off('gameStateUpdate', successListener);
           this.socket?.off('actionError', errorListener);
-          reject(new Error(error.message || 'Unknown error'));
+          
+          // Pass along the error code if it exists
+          if (error.code) {
+            const customError = new Error(error.message || 'Unknown error');
+            (customError as any).code = error.code;
+            reject(customError);
+          } else {
+            reject(new Error(error.message || 'Unknown error'));
+          }
         }
       });
     });
@@ -240,6 +256,15 @@ class NetworkManager implements INetworkManager {
   }
   
   /**
+   * Registers a callback for match removal events
+   */
+  onMatchRemoved(callback: (matchId: string) => void): void {
+    if (!this.socket) return;
+    
+    this.socket.on('matchRemoved', callback);
+  }
+  
+  /**
    * Registers a callback for battle start events
    */
   onBattleStart(callback: (battleState: BattleState) => void): void {
@@ -264,6 +289,28 @@ class NetworkManager implements INetworkManager {
     if (!this.socket) return;
     
     this.socket.on('battleEnd', callback);
+  }
+
+  /**
+   * Sends a request to exit the current match
+   */
+  async exitMatch(matchId: string, playerId: string): Promise<void> {
+    try {
+      const response = await fetch(`http://localhost:4000/api/game/${matchId}/exit`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ playerId }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to exit match');
+      }
+    } catch (error) {
+      console.error('Error exiting match:', error);
+      throw error;
+    }
   }
 }
 

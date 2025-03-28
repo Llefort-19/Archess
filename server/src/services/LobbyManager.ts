@@ -26,6 +26,13 @@ export class LobbyManager {
 
   listMatches(): Match[] {
     return Array.from(this.matches.values())
+      .filter(match => match.status !== 'completed')  // Only return non-completed matches
+      .sort((a, b) => b.createdAt - a.createdAt); // Most recent first
+  }
+
+  listCompletedMatches(): Match[] {
+    return Array.from(this.matches.values())
+      .filter(match => match.status === 'completed')
       .sort((a, b) => b.createdAt - a.createdAt); // Most recent first
   }
 
@@ -81,5 +88,43 @@ export class LobbyManager {
         this.matches.delete(id);
       }
     }
+  }
+
+  /**
+   * Handles a player exiting a match
+   * @param matchId The ID of the match
+   * @param playerId The ID of the player who is exiting
+   * @returns The updated match or null if the match was removed
+   */
+  handlePlayerExit(matchId: string, playerId: string): Match | null {
+    const match = this.matches.get(matchId);
+    if (!match) {
+      return null;
+    }
+
+    // If this is the only player, remove the match entirely
+    if ((playerId === 'player1' && !match.player2) || (playerId === 'player2' && !match.player1)) {
+      this.matches.delete(matchId);
+      return null;
+    }
+
+    // If there's another player, mark the match as completed
+    match.status = 'completed';
+    
+    // Mark the exiting player as lost and the other player as won
+    if (playerId === 'player1') {
+      match.player1 = `${match.player1} (Lost)`;
+      if (match.player2) {
+        match.player2 = `${match.player2} (Won)`;
+      }
+    } else {
+      match.player2 = `${match.player2} (Lost)`;
+      if (match.player1) {
+        match.player1 = `${match.player1} (Won)`;
+      }
+    }
+
+    this.matches.set(matchId, match);
+    return match;
   }
 } 

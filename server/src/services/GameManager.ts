@@ -61,6 +61,11 @@ export class GameManager implements IGameManager {
   }
   
   validateAction(action: GameAction, gameState: GameState): boolean {
+    // Check if both players are present in the game (match is complete)
+    if (action.playerId === 'player1' && gameState.players.length < 2) {
+      return false; // Player 1 cannot make moves until Player 2 has joined
+    }
+    
     // Basic validation
     if (action.playerId !== gameState.currentTurn) {
       return false;

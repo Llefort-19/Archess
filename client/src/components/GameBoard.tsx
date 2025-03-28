@@ -21,13 +21,50 @@ const GameBoard = ({ gameState, networkManager, currentPlayer, matchId }: GameBo
   const [possibleMoves, setPossibleMoves] = useState<Position[]>([]);
   const [isProcessingAction, setIsProcessingAction] = useState(false);
   const [boardUnits, setBoardUnits] = useState<Unit[]>(gameState.board.units);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   
   // Update board units when the gameState changes
   useEffect(() => {
     if (gameState) {
       setBoardUnits(gameState.board.units);
+      
+      // Clear error message when game state updates
+      setErrorMessage(null);
     }
   }, [gameState]);
+  
+  // Add useEffect to listen for match updates
+  useEffect(() => {
+    const socket = (window as any).socket;
+    
+    if (socket) {
+      // Listen for match updates to get player names
+      const handleMatchUpdated = (updatedMatch: any) => {
+        if (updatedMatch.id === matchId) {
+          // Update the activeMatches global with this latest match data
+          const currentMatches = (window as any).activeMatches || [];
+          const matchIndex = currentMatches.findIndex((m: any) => m.id === matchId);
+          
+          if (matchIndex >= 0) {
+            currentMatches[matchIndex] = updatedMatch;
+          } else {
+            currentMatches.push(updatedMatch);
+          }
+          
+          (window as any).activeMatches = currentMatches;
+          
+          // Force a re-render
+          setBoardUnits([...boardUnits]);
+        }
+      };
+      
+      socket.on('matchUpdated', handleMatchUpdated);
+      
+      return () => {
+        socket.off('matchUpdated', handleMatchUpdated);
+      };
+    }
+  }, [matchId, boardUnits]);
   
   // Helper to generate a unique cell key
   const getCellKey = (x: number, y: number) => `cell-${x}-${y}`;
@@ -75,9 +112,23 @@ const GameBoard = ({ gameState, networkManager, currentPlayer, matchId }: GameBo
     return currentPlayer === gameState.currentTurn;
   };
   
+  // Helper to check if the match is ready for play (both players joined)
+  const isMatchReady = (): boolean => {
+    return gameState.players.length === 2;
+  };
+  
   // Handle unit selection
   const handleUnitClick = (unit: Unit) => {
     if (isProcessingAction) return;
+    
+    // Clear any previous error messages
+    setErrorMessage(null);
+    
+    // Check if both players are present
+    if (currentPlayer === 'player1' && !isMatchReady()) {
+      setErrorMessage('Waiting for Player 2 to join...');
+      return;
+    }
     
     // Only allow selecting units if it's player's turn and the unit belongs to them
     if (!isPlayersTurn() || unit.owner !== currentPlayer) {
@@ -90,6 +141,15 @@ const GameBoard = ({ gameState, networkManager, currentPlayer, matchId }: GameBo
   
   // Handle cell click
   const handleCellClick = async (x: number, y: number) => {
+    // Clear any previous error messages
+    setErrorMessage(null);
+    
+    // Check if both players are present
+    if (currentPlayer === 'player1' && !isMatchReady()) {
+      setErrorMessage('Waiting for Player 2 to join...');
+      return;
+    }
+    
     // Handle click based on game phase and selected unit
     if (!gameState || !currentPlayer || !networkManager || !matchId) {
       console.error('Game state, player, network manager, or match ID not available');
@@ -106,8 +166,14 @@ const GameBoard = ({ gameState, networkManager, currentPlayer, matchId }: GameBo
         // Player has a unit selected - try to move it to the clicked cell
         await moveUnit(selectedUnit, { x, y });
         setSelectedUnit(null);
-      } catch (error) {
+      } catch (error: any) {
         console.error('Failed to move unit:', error);
+        // Display specific error for waiting for Player 2
+        if (error.message && error.message.includes('Waiting for Player 2')) {
+          setErrorMessage('Waiting for Player 2 to join...');
+        } else {
+          setErrorMessage(error.message || 'Failed to move unit');
+        }
       }
     } else {
       // No unit selected - see if there's a unit at the clicked position
@@ -124,6 +190,8 @@ const GameBoard = ({ gameState, networkManager, currentPlayer, matchId }: GameBo
     }
 
     try {
+      setIsProcessingAction(true);
+      
       // Create a move action
       const moveAction: GameAction = {
         type: GameActionType.MOVE,
@@ -135,8 +203,17 @@ const GameBoard = ({ gameState, networkManager, currentPlayer, matchId }: GameBo
 
       // Send the action to the server
       await networkManager.sendAction(moveAction, matchId);
-    } catch (error) {
+      
+      // Clear error message on success
+      setErrorMessage(null);
+    } catch (error: any) {
+      // Check for specific error code
+      if (error.code === 'WAITING_FOR_PLAYER2') {
+        throw new Error('Waiting for Player 2 to join');
+      }
       throw new Error(`Failed to move unit: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      setIsProcessingAction(false);
     }
   };
   
@@ -245,19 +322,63 @@ const GameBoard = ({ gameState, networkManager, currentPlayer, matchId }: GameBo
     }
   };
   
-  // Get current player's color for styling
-  const getCurrentPlayerColor = () => {
-    const currentPlayerObj = gameState.players.find(p => p.id === gameState.currentTurn);
-    return currentPlayerObj ? currentPlayerObj.color : '#666';
+  // Helper function to get the player name based on player ID
+  const getPlayerName = (playerId: string) => {
+    // Always fetch the latest match data from the global store
+    const match = (window as any).activeMatches?.find((m: any) => m.id === matchId);
+    
+    if (match) {
+      // Get player name from match data if available (from lobby)
+      if (playerId === 'player1' && match.player1) {
+        return `${match.player1} (Player 1)`;
+      } else if (playerId === 'player2' && match.player2) {
+        return `${match.player2} (Player 2)`;
+      }
+    }
+    
+    // Find the player in the game state players array
+    const playerInfo = gameState.players.find(p => p.id === playerId);
+    
+    // Fallback to game state player info
+    if (playerInfo && playerInfo.name && playerInfo.name !== 'Player 1' && playerInfo.name !== 'Player 2') {
+      return `${playerInfo.name} (${playerId === 'player1' ? 'Player 1' : 'Player 2'})`;
+    }
+    
+    // Default fallback
+    return playerId === 'player1' ? 'Player 1' : 'Player 2';
   };
+
+  // Get colors for player 1 and player 2
+  const player1Color = '#3498db'; // Blue
+  const player2Color = '#e74c3c'; // Red
 
   const isMyTurn = isPlayersTurn();
   
   return (
     <div className="game-board-container">
+      {errorMessage && (
+        <div className="game-error-message">{errorMessage}</div>
+      )}
+      
+      <div className="players-status">
+        <div className={`player-status player1 ${gameState.currentTurn === 'player1' ? 'current-turn' : ''}`}>
+          <div className="player-color-indicator" style={{ backgroundColor: player1Color }}></div>
+          <span>{getPlayerName('player1')}</span>
+          {gameState.currentTurn === 'player1' && <span className="turn-mark">*</span>}
+        </div>
+        
+        <div className="vs-indicator">VS</div>
+        
+        <div className={`player-status player2 ${gameState.currentTurn === 'player2' ? 'current-turn' : ''}`}>
+          <div className="player-color-indicator" style={{ backgroundColor: player2Color }}></div>
+          <span>{getPlayerName('player2')}</span>
+          {gameState.currentTurn === 'player2' && <span className="turn-mark">*</span>}
+        </div>
+      </div>
+      
       <div 
         className="game-board" 
-        style={{ 
+        style={{
           gridTemplateColumns: `repeat(${gameState.board.width}, 1fr)`,
           gridTemplateRows: `repeat(${gameState.board.height}, 1fr)`
         }}
@@ -265,7 +386,6 @@ const GameBoard = ({ gameState, networkManager, currentPlayer, matchId }: GameBo
         {Array.from({ length: gameState.board.height }).map((_, y) =>
           Array.from({ length: gameState.board.width }).map((_, x) => {
             const unit = getUnitAtPosition(x, y);
-            
             return (
               <div
                 key={getCellKey(x, y)}
@@ -280,16 +400,12 @@ const GameBoard = ({ gameState, networkManager, currentPlayer, matchId }: GameBo
       </div>
       
       <div className="game-controls">
-        <button 
+        <button
           className="end-turn-button"
           onClick={handleEndTurn}
-          disabled={isProcessingAction || !isMyTurn}
-          style={{ 
-            borderColor: getCurrentPlayerColor(),
-            opacity: isMyTurn ? 1 : 0.5 
-          }}
+          disabled={!isPlayersTurn() || !isMatchReady() || isProcessingAction}
         >
-          {isMyTurn ? 'End Turn' : 'Waiting...'}
+          End Turn
         </button>
       </div>
     </div>

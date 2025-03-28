@@ -145,4 +145,75 @@
 .end-turn-button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.game-error-message {
+  background-color: rgba(255, 255, 255, 0.9);
+  color: #e74c3c;
+  padding: 10px 15px;
+  border-radius: 5px;
+  margin-bottom: 15px;
+  font-weight: bold;
+  text-align: center;
+  border: 1px solid #e74c3c;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+/* Players status display */
+.players-status {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 100%;
+  margin-bottom: 15px;
+  gap: 15px;
+}
+
+.player-status {
+  display: flex;
+  align-items: center;
+  padding: 8px 15px;
+  border-radius: 20px;
+  background-color: #f5f5f5;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  font-weight: bold;
+  gap: 8px;
+  transition: all 0.3s ease;
+}
+
+.player-status.current-turn {
+  transform: scale(1.05);
+  box-shadow: 0 3px 8px rgba(0,0,0,0.2);
+}
+
+.player-status.player1.current-turn {
+  background-color: rgba(52, 152, 219, 0.2);
+}
+
+.player-status.player2.current-turn {
+  background-color: rgba(231, 76, 60, 0.2);
+}
+
+.player-color-indicator {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+}
+
+.vs-indicator {
+  font-weight: bold;
+  color: #777;
+  font-size: 14px;
+}
+
+.turn-mark {
+  margin-left: 5px;
+  color: #4CAF50;
+  font-size: 18px;
+  animation: blink 1s infinite;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
 } 

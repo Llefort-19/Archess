@@ -132,4 +132,29 @@
   padding: 40px;
   font-size: 18px;
   color: #666;
+}
+
+.completed-matches {
+  margin-top: 2rem;
+  padding-top: 1rem;
+  border-top: 1px solid #eee;
+}
+
+.completed-matches h2 {
+  color: #666;
+  margin-bottom: 1rem;
+}
+
+.completed-matches .match-item {
+  background-color: #f8f8f8;
+  opacity: 0.8;
+}
+
+.completed-matches .match-item .match-status {
+  color: #666;
+}
+
+.completed-matches .player-slot {
+  color: #444;
+  font-style: italic;
 } 

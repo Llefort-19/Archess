@@ -39,10 +39,14 @@ const connectedPlayers = new Map<string, { playerId: string; matchId: string }>(
 // Lobby API Routes
 app.get('/api/lobby/matches', (req, res) => {
   try {
-    console.log('GET /api/lobby/matches - Listing all matches');
-    const matches = lobbyManager.listMatches();
-    console.log(`Found ${matches.length} active matches`);
-    res.json({ matches });
+    console.log('GET /api/lobby/matches - Listing matches');
+    const activeMatches = lobbyManager.listMatches();
+    const completedMatches = lobbyManager.listCompletedMatches();
+    console.log(`Found ${activeMatches.length} active matches and ${completedMatches.length} completed matches`);
+    res.json({ 
+      activeMatches,
+      completedMatches
+    });
   } catch (error) {
     console.error('Error in GET /api/lobby/matches:', error);
     res.status(500).json({ error: 'Failed to list matches' });
@@ -133,6 +137,34 @@ app.post('/api/game/:matchId/reset', async (req, res) => {
   }
 });
 
+// Handle player exit from match
+app.post('/api/game/:matchId/exit', (req, res) => {
+  try {
+    const { matchId } = req.params;
+    const { playerId } = req.body;
+
+    if (!playerId) {
+      return res.status(400).json({ error: 'Player ID is required' });
+    }
+
+    // Handle the player exit in the lobby manager
+    const updatedMatch = lobbyManager.handlePlayerExit(matchId, playerId);
+
+    // If match was removed (single player), emit matchRemoved event
+    if (!updatedMatch) {
+      io.emit('matchRemoved', matchId);
+    } else {
+      // If match was updated (two players), emit matchUpdated event
+      io.emit('matchUpdated', updatedMatch);
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error handling player exit:', error);
+    res.status(500).json({ error: 'Failed to handle player exit' });
+  }
+});
+
 // Socket.IO Connection Handler
 io.on('connection', (socket) => {
   console.log(`User connected: ${socket.id}`);
@@ -176,6 +208,25 @@ io.on('connection', (socket) => {
         console.error(error.message);
         socket.emit('actionError', { message: 'No match ID provided with action' });
         if (callback) callback({ message: 'No match ID provided with action' });
+        return;
+      }
+      
+      // Get the match from the lobby manager
+      const match = lobbyManager.getMatch(matchId);
+      if (!match) {
+        const error = new Error('Match not found');
+        console.error(error.message);
+        socket.emit('actionError', { message: 'Match not found' });
+        if (callback) callback({ message: 'Match not found' });
+        return;
+      }
+      
+      // Check if both players have joined the match
+      if (action.playerId === 'player1' && (!match.player2 || match.status !== 'in_progress')) {
+        const error = new Error('Waiting for Player 2 to join');
+        console.error(error.message);
+        socket.emit('actionError', { message: 'Waiting for Player 2 to join', code: 'WAITING_FOR_PLAYER2' });
+        if (callback) callback({ message: 'Waiting for Player 2 to join', code: 'WAITING_FOR_PLAYER2' });
         return;
       }
       

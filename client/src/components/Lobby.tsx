@@ -7,7 +7,8 @@ interface LobbyProps {
 }
 
 export const Lobby: React.FC<LobbyProps> = ({ onJoinMatch }) => {
-  const [matches, setMatches] = useState<Match[]>([]);
+  const [activeMatches, setActiveMatches] = useState<Match[]>([]);
+  const [completedMatches, setCompletedMatches] = useState<Match[]>([]);
   const [playerName, setPlayerName] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -21,19 +22,31 @@ export const Lobby: React.FC<LobbyProps> = ({ onJoinMatch }) => {
     
     if (socket) {
       socket.on('matchCreated', (match: Match) => {
-        setMatches(prev => [match, ...prev]);
+        setActiveMatches(prev => [match, ...prev]);
       });
 
       socket.on('matchUpdated', (updatedMatch: Match) => {
-        setMatches(prev => prev.map(match => 
-          match.id === updatedMatch.id ? updatedMatch : match
-        ));
+        if (updatedMatch.status === 'completed') {
+          // Remove from active matches and add to completed matches
+          setActiveMatches(prev => prev.filter(match => match.id !== updatedMatch.id));
+          setCompletedMatches(prev => [updatedMatch, ...prev]);
+        } else {
+          // Update in active matches
+          setActiveMatches(prev => prev.map(match => 
+            match.id === updatedMatch.id ? updatedMatch : match
+          ));
+        }
+      });
+
+      socket.on('matchRemoved', (removedMatchId: string) => {
+        setActiveMatches(prev => prev.filter(match => match.id !== removedMatchId));
       });
 
       // Cleanup
       return () => {
         socket.off('matchCreated');
         socket.off('matchUpdated');
+        socket.off('matchRemoved');
       };
     } else {
       setError('Socket connection not available. Real-time updates disabled.');
@@ -44,7 +57,8 @@ export const Lobby: React.FC<LobbyProps> = ({ onJoinMatch }) => {
     try {
       const response = await fetch('http://localhost:4000/api/lobby/matches');
       const data = await response.json();
-      setMatches(data.matches);
+      setActiveMatches(data.activeMatches);
+      setCompletedMatches(data.completedMatches);
       setLoading(false);
     } catch (err) {
       setError('Failed to fetch matches');
@@ -145,10 +159,10 @@ export const Lobby: React.FC<LobbyProps> = ({ onJoinMatch }) => {
 
       <div className="matches-list">
         <h2>Available Matches</h2>
-        {matches.length === 0 ? (
+        {activeMatches.length === 0 ? (
           <p>No matches available. Create one to start playing!</p>
         ) : (
-          matches.map(match => (
+          activeMatches.map(match => (
             <div key={match.id} className={`match-item ${match.status}`}>
               <div className="match-info">
                 <span className="match-id">Match #{match.id.slice(0, 8)}</span>
@@ -180,6 +194,30 @@ export const Lobby: React.FC<LobbyProps> = ({ onJoinMatch }) => {
                 {match.status === 'in_progress' && (
                   <span className="match-full">Match in progress</span>
                 )}
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+
+      <div className="completed-matches">
+        <h2>Completed Matches</h2>
+        {completedMatches.length === 0 ? (
+          <p>No completed matches yet.</p>
+        ) : (
+          completedMatches.map(match => (
+            <div key={match.id} className="match-item completed">
+              <div className="match-info">
+                <span className="match-id">Match #{match.id.slice(0, 8)}</span>
+                <span className="match-status">Completed</span>
+              </div>
+              <div className="match-players">
+                <div className="player-slot">
+                  {match.player1}
+                </div>
+                <div className="player-slot">
+                  {match.player2}
+                </div>
               </div>
             </div>
           ))
