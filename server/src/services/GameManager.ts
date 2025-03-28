@@ -12,6 +12,18 @@ import {
 } from '@archess/shared';
 import { v4 as uuidv4 } from 'uuid';
 
+// Constants for the game board
+const BOARD_WIDTH = 5;
+const BOARD_HEIGHT = 5;
+
+// Movement limits for each unit type
+const MOVEMENT_LIMITS = {
+  'CHAMPION': 1,   // Champion moves 1 tile per turn
+  'SCOUT': 3,      // Scout moves up to 3 tiles per turn
+  'DEFENDER': 1,   // Defender moves 1 tile per turn
+  'MAGE': 2        // Mage moves up to 2 tiles per turn
+};
+
 export class GameManager implements IGameManager {
   private gameStates: Map<string, GameState>;
   
@@ -67,7 +79,7 @@ export class GameManager implements IGameManager {
     }
     
     // Basic validation
-    if (action.playerId !== gameState.currentTurn) {
+    if (action.playerId !== gameState.currentTurnPlayerId) {
       return false;
     }
     
@@ -134,13 +146,54 @@ export class GameManager implements IGameManager {
       return false;
     }
     
-    // For this simplified version, only allow 1 square movement (like chess)
+    // Get the movement limit for this unit type
+    const movementLimit = MOVEMENT_LIMITS[unit.type as keyof typeof MOVEMENT_LIMITS];
+    
+    // Calculate the Manhattan distance (no diagonals allowed)
     const xDiff = Math.abs(targetPosition.x - unit.position.x);
     const yDiff = Math.abs(targetPosition.y - unit.position.y);
     
-    // Allow movement of only 1 square in any direction
-    if (xDiff > 1 || yDiff > 1) {
+    // For simplified movement, we're not allowing diagonal movement
+    // So the move is either horizontal or vertical, not both
+    if (xDiff > 0 && yDiff > 0) {
+      return false; // Diagonal movement is not allowed
+    }
+    
+    const distance = xDiff + yDiff;
+    
+    // Check if the move distance is within the unit's movement limit
+    if (distance > movementLimit) {
       return false;
+    }
+    
+    // Check for path obstruction (units in the way)
+    if (distance > 1) {
+      // We need to check each tile in the path
+      const dx = Math.sign(targetPosition.x - unit.position.x);
+      const dy = Math.sign(targetPosition.y - unit.position.y);
+      
+      let currentX = unit.position.x;
+      let currentY = unit.position.y;
+      
+      // Check each tile along the path (excluding the start and target)
+      while ((currentX !== targetPosition.x) || (currentY !== targetPosition.y)) {
+        currentX += dx;
+        currentY += dy;
+        
+        // Skip checking the target position (we want to allow moving to an enemy-occupied tile)
+        if (currentX === targetPosition.x && currentY === targetPosition.y) {
+          break;
+        }
+        
+        // Check if there's any unit blocking the path
+        const blockingUnit = gameState.board.units.find(u => 
+          u.position.x === currentX && u.position.y === currentY
+        );
+        
+        if (blockingUnit) {
+          return false; // Path is blocked
+        }
+      }
     }
     
     // Check if there is another friendly unit at the target position
@@ -151,7 +204,7 @@ export class GameManager implements IGameManager {
     );
     
     if (unitAtTarget) {
-      return false;
+      return false; // Cannot move to a position occupied by a friendly unit
     }
     
     return true;
@@ -172,14 +225,11 @@ export class GameManager implements IGameManager {
       u.owner !== unit.owner
     );
     
+    let updatedUnits = [...gameState.board.units];
+    
     if (enemyUnitIndex !== -1) {
-      // In a real implementation, this would start a battle
-      // For now, we'll just remove the enemy unit (simulating a won battle)
-      const enemyUnit = gameState.board.units[enemyUnitIndex];
-      
-      // Create a copy of the units array and remove the enemy unit
-      const updatedUnits = [...gameState.board.units];
-      updatedUnits.splice(enemyUnitIndex, 1);
+      // For this prototype, we'll merely register the board position, 
+      // but in the future, this would trigger the arcade combat phase
       
       // Move the attacking unit to the target position
       updatedUnits[unitIndex] = {
@@ -187,41 +237,36 @@ export class GameManager implements IGameManager {
         position: action.targetPosition
       };
       
-      // Update the game state
-      return {
-        ...gameState,
-        board: {
-          ...gameState.board,
-          units: updatedUnits
-        }
-      };
+      // Note: In the actual game, instead of removing the enemy unit here,
+      // we would trigger the arcade combat phase and determine the outcome there.
+      // For now, we'll just simulate a battle by removing the enemy unit
+      updatedUnits.splice(enemyUnitIndex, 1);
     } else {
       // Just move the unit
-      const updatedUnits = [...gameState.board.units];
       updatedUnits[unitIndex] = {
         ...unit,
         position: action.targetPosition
       };
-      
-      // Update the game state
-      return {
-        ...gameState,
-        board: {
-          ...gameState.board,
-          units: updatedUnits
-        }
-      };
     }
+    
+    // Update the game state
+    return {
+      ...gameState,
+      board: {
+        ...gameState.board,
+        units: updatedUnits
+      }
+    };
   }
   
   private handleEndTurnAction(action: GameAction, gameState: GameState): GameState {
     // Switch to the other player's turn
-    const currentPlayerIndex = gameState.players.findIndex(p => p.id === gameState.currentTurn);
+    const currentPlayerIndex = gameState.players.findIndex(p => p.id === gameState.currentTurnPlayerId);
     const nextPlayerIndex = (currentPlayerIndex + 1) % gameState.players.length;
     
     return {
       ...gameState,
-      currentTurn: gameState.players[nextPlayerIndex].id
+      currentTurnPlayerId: gameState.players[nextPlayerIndex].id
     };
   }
   
@@ -239,45 +284,107 @@ export class GameManager implements IGameManager {
       color: '#e74c3c' // red
     };
     
-    // Create a small 3x3 board
-    const width = 3;
-    const height = 3;
+    // Create a 5x5 board as specified in requirements
+    const width = BOARD_WIDTH;
+    const height = BOARD_HEIGHT;
     
     // Initialize all tiles as empty
     const tiles: TileType[][] = Array(height).fill(null).map(() => 
       Array(width).fill(TileType.EMPTY)
     );
     
-    // Create some units for each player
+    // Create units for each player
     const units: Unit[] = [
       // Player 1 units
       {
         id: uuidv4(),
-        type: UnitType.WARRIOR,
+        type: 'CHAMPION' as UnitType,
         position: { x: 0, y: 0 },
         owner: player1.id,
-        stats: {
-          health: 100,
-          maxHealth: 100,
-          speed: 3,
-          attack: 10,
-          defense: 5
-        }
+        health: 100,
+        maxHealth: 100,
+        attack: 10,
+        defense: 5,
+        speed: 1
+      },
+      {
+        id: uuidv4(),
+        type: 'SCOUT' as UnitType,
+        position: { x: 1, y: 0 },
+        owner: player1.id,
+        health: 60,
+        maxHealth: 60,
+        attack: 7,
+        defense: 3,
+        speed: 3
+      },
+      {
+        id: uuidv4(),
+        type: 'DEFENDER' as UnitType,
+        position: { x: 2, y: 0 },
+        owner: player1.id,
+        health: 80,
+        maxHealth: 80,
+        attack: 6,
+        defense: 9,
+        speed: 1
+      },
+      {
+        id: uuidv4(),
+        type: 'MAGE' as UnitType,
+        position: { x: 3, y: 0 },
+        owner: player1.id,
+        health: 70,
+        maxHealth: 70,
+        attack: 12,
+        defense: 4,
+        speed: 2
       },
       
       // Player 2 units
       {
         id: uuidv4(),
-        type: UnitType.WIZARD,
-        position: { x: 2, y: 2 },
+        type: 'CHAMPION' as UnitType,
+        position: { x: 4, y: 4 },
         owner: player2.id,
-        stats: {
-          health: 80,
-          maxHealth: 80,
-          speed: 2,
-          attack: 15,
-          defense: 3
-        }
+        health: 100,
+        maxHealth: 100,
+        attack: 10,
+        defense: 5,
+        speed: 1
+      },
+      {
+        id: uuidv4(),
+        type: 'SCOUT' as UnitType,
+        position: { x: 3, y: 4 },
+        owner: player2.id,
+        health: 60,
+        maxHealth: 60,
+        attack: 7,
+        defense: 3,
+        speed: 3
+      },
+      {
+        id: uuidv4(),
+        type: 'DEFENDER' as UnitType,
+        position: { x: 2, y: 4 },
+        owner: player2.id,
+        health: 80,
+        maxHealth: 80,
+        attack: 6,
+        defense: 9,
+        speed: 1
+      },
+      {
+        id: uuidv4(),
+        type: 'MAGE' as UnitType,
+        position: { x: 1, y: 4 },
+        owner: player2.id,
+        health: 70,
+        maxHealth: 70,
+        attack: 12,
+        defense: 4,
+        speed: 2
       }
     ];
     
@@ -289,7 +396,7 @@ export class GameManager implements IGameManager {
         tiles,
         units
       },
-      currentTurn: player1.id,
+      currentTurnPlayerId: player1.id,
       phase: GamePhase.TURN_BASED,
       players: [player1, player2]
     };

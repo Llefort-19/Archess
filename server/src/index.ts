@@ -107,14 +107,12 @@ app.post('/api/lobby/join', (req, res) => {
 });
 
 // Game API Routes
-app.get('/api/game/:matchId', (req, res) => {
+app.get('/api/game/:matchId', async (req, res) => {
   try {
     const { matchId } = req.params;
-    console.log(`GET /api/game/${matchId} - Fetching game state`);
-    
     const gameState = gameManager.getGameState(matchId);
+    
     if (!gameState) {
-      console.log(`Game state not found for match ${matchId}`);
       return res.status(404).json({ error: 'Game not found' });
     }
     
@@ -123,17 +121,6 @@ app.get('/api/game/:matchId', (req, res) => {
   } catch (error) {
     console.error(`Error in GET /api/game/${req.params.matchId}:`, error);
     res.status(500).json({ error: 'Failed to get game state' });
-  }
-});
-
-app.post('/api/game/:matchId/reset', async (req, res) => {
-  try {
-    const { matchId } = req.params;
-    const gameState = await gameManager.initializeGame(matchId);
-    io.to(matchId).emit('gameStateUpdate', gameState);
-    res.json(gameState);
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to reset game' });
   }
 });
 

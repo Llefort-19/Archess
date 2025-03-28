@@ -3,7 +3,8 @@ import {
   GameState, 
   Position, 
   Unit, 
-  GameAction 
+  GameAction,
+  UnitType
 } from '@archess/shared';
 import { GameActionType } from '../types/game';
 import NetworkManager from '../services/NetworkManager';
@@ -74,19 +75,46 @@ const GameBoard = ({ gameState, networkManager, currentPlayer, matchId }: GameBo
     return boardUnits.find(u => u.position.x === x && u.position.y === y);
   };
   
-  // Calculate possible moves for a unit (simple version)
+  // Calculate possible moves for a unit based on its type
   const calculatePossibleMoves = (unit: Unit): Position[] => {
     const { x, y } = unit.position;
     const possiblePositions: Position[] = [];
     
-    // For this simple implementation, allow movement of 1 square in any direction (like chess)
-    for (let dx = -1; dx <= 1; dx++) {
-      for (let dy = -1; dy <= 1; dy++) {
-        // Skip the current position
-        if (dx === 0 && dy === 0) continue;
-        
-        const newX = x + dx;
-        const newY = y + dy;
+    // Get the movement limit for this unit type
+    let movementLimit = 1; // Default
+    
+    // Cast unit.type to string to handle enum inconsistencies
+    const unitType = unit.type as string;
+    
+    switch (unitType) {
+      case 'CHAMPION':
+        movementLimit = 1;
+        break;
+      case 'SCOUT':
+        movementLimit = 3;
+        break;
+      case 'DEFENDER':
+        movementLimit = 1;
+        break;
+      case 'MAGE':
+        movementLimit = 2;
+        break;
+    }
+    
+    // Add positions in each cardinal direction (no diagonals)
+    // We'll check up to the movement limit in each direction
+    const directions = [
+      { dx: 1, dy: 0 },  // right
+      { dx: -1, dy: 0 }, // left
+      { dx: 0, dy: 1 },  // down
+      { dx: 0, dy: -1 }, // up
+    ];
+    
+    for (const { dx, dy } of directions) {
+      // Check each step in this direction up to the movement limit
+      for (let step = 1; step <= movementLimit; step++) {
+        const newX = x + (dx * step);
+        const newY = y + (dy * step);
         
         // Check if position is within board boundaries
         if (
@@ -95,11 +123,25 @@ const GameBoard = ({ gameState, networkManager, currentPlayer, matchId }: GameBo
           newY >= 0 && 
           newY < gameState.board.height
         ) {
-          // Check if there's a friendly unit at the target position
-          const unitAtTarget = getUnitAtPosition(newX, newY);
-          if (unitAtTarget && unitAtTarget.owner === unit.owner) continue;
+          // Check if there's a unit at this position
+          const unitAtPosition = getUnitAtPosition(newX, newY);
           
+          if (unitAtPosition) {
+            // If there's a friendly unit, we can't move here or beyond
+            if (unitAtPosition.owner === unit.owner) {
+              break;
+            }
+            
+            // If there's an enemy unit, we can move here (to attack) but not beyond
+            possiblePositions.push({ x: newX, y: newY });
+            break;
+          }
+          
+          // Empty space, we can move here
           possiblePositions.push({ x: newX, y: newY });
+        } else {
+          // Out of bounds, stop checking in this direction
+          break;
         }
       }
     }
@@ -107,9 +149,15 @@ const GameBoard = ({ gameState, networkManager, currentPlayer, matchId }: GameBo
     return possiblePositions;
   };
   
+  // Access the current turn property safely
+  const getCurrentTurnPlayerId = () => {
+    // Use type assertion to handle the property name difference
+    return (gameState as any).currentTurnPlayerId || gameState.currentTurn;
+  };
+
   // Check if it's the current player's turn
   const isPlayersTurn = (): boolean => {
-    return currentPlayer === gameState.currentTurn;
+    return currentPlayer === getCurrentTurnPlayerId();
   };
   
   // Helper to check if the match is ready for play (both players joined)
@@ -156,7 +204,7 @@ const GameBoard = ({ gameState, networkManager, currentPlayer, matchId }: GameBo
       return;
     }
 
-    if (gameState.currentTurn !== currentPlayer) {
+    if (getCurrentTurnPlayerId() !== currentPlayer) {
       // Not this player's turn
       return;
     }
@@ -324,15 +372,22 @@ const GameBoard = ({ gameState, networkManager, currentPlayer, matchId }: GameBo
   
   // Helper function to get the player name based on player ID
   const getPlayerName = (playerId: string) => {
+    // Debug: Log available match data
+    console.log('Getting player name for:', playerId);
+    console.log('Current matchId:', matchId);
+    console.log('Active matches available:', (window as any).activeMatches);
+    
     // Always fetch the latest match data from the global store
-    const match = (window as any).activeMatches?.find((m: any) => m.id === matchId);
+    const activeMatches = (window as any).activeMatches || [];
+    const match = activeMatches.find((m: any) => m.id === matchId);
     
     if (match) {
+      console.log('Found match:', match);
       // Get player name from match data if available (from lobby)
       if (playerId === 'player1' && match.player1) {
-        return `${match.player1} (Player 1)`;
+        return `${match.player1}`;
       } else if (playerId === 'player2' && match.player2) {
-        return `${match.player2} (Player 2)`;
+        return `${match.player2}`;
       }
     }
     
@@ -341,7 +396,7 @@ const GameBoard = ({ gameState, networkManager, currentPlayer, matchId }: GameBo
     
     // Fallback to game state player info
     if (playerInfo && playerInfo.name && playerInfo.name !== 'Player 1' && playerInfo.name !== 'Player 2') {
-      return `${playerInfo.name} (${playerId === 'player1' ? 'Player 1' : 'Player 2'})`;
+      return `${playerInfo.name}`;
     }
     
     // Default fallback
@@ -361,18 +416,18 @@ const GameBoard = ({ gameState, networkManager, currentPlayer, matchId }: GameBo
       )}
       
       <div className="players-status">
-        <div className={`player-status player1 ${gameState.currentTurn === 'player1' ? 'current-turn' : ''}`}>
+        <div className={`player-status player1 ${getCurrentTurnPlayerId() === 'player1' ? 'current-turn' : ''}`}>
           <div className="player-color-indicator" style={{ backgroundColor: player1Color }}></div>
           <span>{getPlayerName('player1')}</span>
-          {gameState.currentTurn === 'player1' && <span className="turn-mark">*</span>}
+          {getCurrentTurnPlayerId() === 'player1' && <span className="turn-mark">*</span>}
         </div>
         
         <div className="vs-indicator">VS</div>
         
-        <div className={`player-status player2 ${gameState.currentTurn === 'player2' ? 'current-turn' : ''}`}>
+        <div className={`player-status player2 ${getCurrentTurnPlayerId() === 'player2' ? 'current-turn' : ''}`}>
           <div className="player-color-indicator" style={{ backgroundColor: player2Color }}></div>
           <span>{getPlayerName('player2')}</span>
-          {gameState.currentTurn === 'player2' && <span className="turn-mark">*</span>}
+          {getCurrentTurnPlayerId() === 'player2' && <span className="turn-mark">*</span>}
         </div>
       </div>
       

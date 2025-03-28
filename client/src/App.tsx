@@ -86,6 +86,8 @@ function App() {
       if (currentMatchId && updatedMatch.id === currentMatchId) {
         // Update the match in our global list
         const currentMatches = (window as any).activeMatches || [];
+        console.log('Current matches before update:', currentMatches);
+        
         const matchIndex = currentMatches.findIndex((m: any) => m.id === currentMatchId);
         
         if (matchIndex >= 0) {
@@ -95,6 +97,15 @@ function App() {
         }
         
         (window as any).activeMatches = currentMatches;
+        console.log('Active matches after update:', (window as any).activeMatches);
+        
+        // Force re-render to update player names if needed
+        setGameState((prevState) => {
+          if (prevState) {
+            return { ...prevState };
+          }
+          return prevState;
+        });
         
         // If the match is completed, show a message and return to lobby
         if (updatedMatch.status === 'completed') {
@@ -184,21 +195,6 @@ function App() {
     }
   }, [gameState?.players.length, currentPlayer, previousPlayersCount, currentScreen]);
 
-  const resetGame = async () => {
-    try {
-      setLoading(true);
-      const response = await fetch('http://localhost:4000/api/game/reset', {
-        method: 'POST',
-      });
-      const data = await response.json();
-      setGameState(data);
-      setLoading(false);
-    } catch (err) {
-      setError('Failed to reset game');
-      setLoading(false);
-    }
-  };
-
   const handleJoinMatch = async (matchId: string, player: 'player1' | 'player2') => {
     setLoading(true);
     setError(null);
@@ -223,13 +219,18 @@ function App() {
       const matchesResponse = await fetch(`http://localhost:4000/api/lobby/matches`);
       if (matchesResponse.ok) {
         const matchesData = await matchesResponse.json();
-        // Store matches globally for player name lookup
-        (window as any).activeMatches = matchesData.matches;
+        console.log('Match data received:', matchesData);
+        
+        // Store matches globally for player name lookup - ensure we're using the correct property
+        (window as any).activeMatches = matchesData.activeMatches || [];
+        
+        // Debug: Log active matches to verify data
+        console.log('Active matches stored:', (window as any).activeMatches);
         
         // Only check for Player 2 joining if we are Player 1
         // and we're not creating a new match (already in-game)
         if (player === 'player1' && currentScreen === 'game') {
-          const thisMatch = matchesData.matches.find((m: any) => m.id === matchId);
+          const thisMatch = (window as any).activeMatches.find((m: any) => m.id === matchId);
           if (thisMatch && thisMatch.player2 && thisMatch.status === 'in_progress') {
             console.log('Player 2 already in match when Player 1 joins!');
             setShowJoinNotification(true);
@@ -318,6 +319,12 @@ function App() {
     return role === 'player1' ? 'Player 1' : 'Player 2';
   };
 
+  // Helper to get current turn player id safely
+  const getCurrentTurnPlayerId = (state: GameState) => {
+    // Use type assertion to handle the property name difference
+    return (state as any).currentTurnPlayerId || state.currentTurn;
+  };
+
   // Add a useEffect to monitor the notification state
   useEffect(() => {
     console.log('Notification state changed:', showJoinNotification);
@@ -366,7 +373,6 @@ function App() {
             </div>
           )}
           <button onClick={handleExitMatch}>Exit Match</button>
-          <button onClick={resetGame}>Reset Game</button>
         </div>
       </header>
       
@@ -381,11 +387,11 @@ function App() {
                 </span>
               </div>
               
-              <div className={`turn-indicator ${gameState.currentTurn === currentPlayer ? 'your-turn' : ''}`}>
-                {gameState.currentTurn === currentPlayer ? (
+              <div className={`turn-indicator ${getCurrentTurnPlayerId(gameState) === currentPlayer ? 'your-turn' : ''}`}>
+                {getCurrentTurnPlayerId(gameState) === currentPlayer ? (
                   <span>Your Turn</span>
                 ) : (
-                  <span>Waiting for {getPlayerNameWithRole(gameState.currentTurn as 'player1' | 'player2')}</span>
+                  <span>Waiting for {getPlayerNameWithRole(getCurrentTurnPlayerId(gameState) as 'player1' | 'player2')}</span>
                 )}
               </div>
             </div>
