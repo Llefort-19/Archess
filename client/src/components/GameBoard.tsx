@@ -1,14 +1,18 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { 
   GameState, 
   Position, 
   Unit, 
   GameAction,
-  UnitType
+  UnitType,
+  BattleState
 } from '@archess/shared';
 import { GameActionType } from '../types/game';
 import NetworkManager from '../services/NetworkManager';
+import ArcadeCombatManager from '../services/ArcadeCombatManager';
+import ArcadeCombat from './arcade/ArcadeCombat';
 import './GameBoard.css';
+import React from 'react';
 
 interface GameBoardProps {
   gameState: GameState;
@@ -23,6 +27,10 @@ const GameBoard = ({ gameState, networkManager, currentPlayer, matchId }: GameBo
   const [isProcessingAction, setIsProcessingAction] = useState(false);
   const [boardUnits, setBoardUnits] = useState<Unit[]>(gameState.board.units);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [activeBattle, setActiveBattle] = useState<BattleState | null>(null);
+  
+  // Get a reference to the combat manager
+  const arcadeCombatManager = ArcadeCombatManager.getInstance();
   
   // Update board units when the gameState changes
   useEffect(() => {
@@ -33,6 +41,95 @@ const GameBoard = ({ gameState, networkManager, currentPlayer, matchId }: GameBo
       setErrorMessage(null);
     }
   }, [gameState]);
+  
+  // Listen for battle state changes
+  useEffect(() => {
+    const handleBattleChange = (battleState: BattleState | null) => {
+      console.log('Battle state changed:', battleState);
+      
+      // Validate the battle state before setting it
+      if (battleState) {
+        console.log('Validating battle state before activating', {
+          attackerExists: !!battleState.attacker,
+          defenderExists: !!battleState.defender,
+          attackerId: battleState.attacker?.id,
+          defenderId: battleState.defender?.id
+        });
+        
+        const isValid = 
+          battleState.attacker && 
+          battleState.defender && 
+          typeof battleState.attacker.id === 'string' &&
+          typeof battleState.defender.id === 'string';
+        
+        if (!isValid) {
+          console.error('Received invalid battle state:', battleState);
+          return;
+        }
+        
+        // Additional validation to ensure units have stats
+        if (!battleState.attacker.stats || !battleState.defender.stats) {
+          console.error('Battle units missing stats:', battleState);
+          return;
+        }
+        
+        console.log('Battle state valid, activating battle');
+      } else {
+        console.log('Clearing battle state');
+      }
+      
+      setActiveBattle(battleState);
+    };
+    
+    console.log('Setting up battle listener');
+    // Register listener with the combat manager
+    arcadeCombatManager.addBattleListener(handleBattleChange);
+    
+    return () => {
+      console.log('Cleaning up battle listener');
+      arcadeCombatManager.removeBattleListener(handleBattleChange);
+    };
+  }, [arcadeCombatManager]);
+  
+  // Listen for game state changes that might indicate a battle
+  useEffect(() => {
+    // If there are units from different players on the same position, it might be a battle
+    if (gameState && gameState.board && gameState.board.units) {
+      const positionMap: { [key: string]: Unit[] } = {};
+      
+      // Group units by position
+      gameState.board.units.forEach(unit => {
+        if (!unit || !unit.position) return;
+        
+        const posKey = `${unit.position.x},${unit.position.y}`;
+        if (!positionMap[posKey]) {
+          positionMap[posKey] = [];
+        }
+        positionMap[posKey].push(unit);
+      });
+      
+      // Check for positions with multiple units from different players
+      for (const posKey in positionMap) {
+        const unitsAtPos = positionMap[posKey];
+        if (unitsAtPos.length > 1) {
+          const owners = new Set(unitsAtPos.map(u => u.owner));
+          if (owners.size > 1) {
+            console.log('Detected potential battle in game state update:', unitsAtPos);
+            
+            // Ensure we're not already in a battle
+            if (!activeBattle) {
+              // Try to initialize battle through the manager
+              const unitA = unitsAtPos[0];
+              const unitB = unitsAtPos[1];
+              if (unitA.owner !== unitB.owner) {
+                arcadeCombatManager.checkForBattle(gameState, unitA);
+              }
+            }
+          }
+        }
+      }
+    }
+  }, [gameState, activeBattle, arcadeCombatManager]);
   
   // Add useEffect to listen for match updates
   useEffect(() => {
@@ -213,7 +310,6 @@ const GameBoard = ({ gameState, networkManager, currentPlayer, matchId }: GameBo
       try {
         // Player has a unit selected - try to move it to the clicked cell
         await moveUnit(selectedUnit, { x, y });
-        setSelectedUnit(null);
       } catch (error: any) {
         console.error('Failed to move unit:', error);
         // Display specific error for waiting for Player 2
@@ -252,6 +348,79 @@ const GameBoard = ({ gameState, networkManager, currentPlayer, matchId }: GameBo
       // Send the action to the server
       await networkManager.sendAction(moveAction, matchId);
       
+      console.log('Move completed, checking for battles with:', {
+        unitId: unit.id,
+        targetPosition
+      });
+      
+      // Create a clone of the unit with the updated position for battle checking
+      const updatedUnit = {
+        ...unit,
+        position: targetPosition
+      };
+      
+      // Check if there are any enemy units at the target position
+      const enemyUnitsAtPosition = gameState.board.units.filter(u => 
+        u.id !== unit.id && // Not the moved unit
+        u.owner !== currentPlayer && // Enemy unit
+        u.position.x === targetPosition.x && 
+        u.position.y === targetPosition.y
+      );
+      
+      console.log('Enemy units at target position:', enemyUnitsAtPosition);
+      
+      if (enemyUnitsAtPosition.length > 0) {
+        console.log('Potential battle detected with unit:', enemyUnitsAtPosition[0]);
+        
+        // Create a wait promise to ensure both players have time to sync
+        const waitForBattleSync = new Promise<void>((resolve) => {
+          // First create a modified game state with the updated unit position
+          const modifiedGameState = {
+            ...gameState,
+            board: {
+              ...gameState.board,
+              units: gameState.board.units.map(u => 
+                u.id === unit.id ? updatedUnit : u
+              )
+            }
+          };
+          
+          // Battle with the first enemy unit we find
+          const battle = arcadeCombatManager.checkForBattle(modifiedGameState, updatedUnit);
+          
+          if (battle) {
+            console.log('Battle confirmed and activated!');
+            // A battle was triggered, so we'll wait for the battle to complete
+            // The turn will be ended after the battle is over
+            resolve();
+            return;
+          }
+          
+          // No battle was triggered, proceed after a short delay
+          setTimeout(() => {
+            console.warn('Battle check did not create a battle despite enemy units at position');
+            resolve();
+          }, 300);
+        });
+        
+        // Wait for battle sync before proceeding
+        await waitForBattleSync;
+        
+        // If a battle was triggered (activeBattle is set), return without ending turn
+        if (activeBattle) {
+          return;
+        }
+      } else {
+        console.log('No enemy units at target position, continuing turn end');
+      }
+      
+      // No battle was triggered, proceed with ending the turn
+      await endTurn();
+      
+      // Clear selection after ending turn
+      setSelectedUnit(null);
+      setPossibleMoves([]);
+      
       // Clear error message on success
       setErrorMessage(null);
     } catch (error: any) {
@@ -281,6 +450,7 @@ const GameBoard = ({ gameState, networkManager, currentPlayer, matchId }: GameBo
       await networkManager.sendAction(endTurnAction, matchId);
     } catch (error) {
       console.error('Failed to end turn:', error);
+      throw error; // Rethrow to let calling code handle it
     }
   };
   
@@ -330,46 +500,6 @@ const GameBoard = ({ gameState, networkManager, currentPlayer, matchId }: GameBo
     );
   };
   
-  // End turn handler
-  const handleEndTurn = async () => {
-    if (isProcessingAction || !isPlayersTurn()) return;
-    
-    // Use the matchId prop directly
-    if (!matchId) {
-      console.error('No match ID provided in props');
-      return;
-    }
-    
-    console.log(`Attempting to end turn for player ${currentPlayer} in match ${matchId}`);
-    
-    try {
-      setIsProcessingAction(true);
-      
-      // Ensure player identification is established
-      if (!networkManager.getPlayerId()) {
-        console.log(`Re-establishing player identification as ${currentPlayer} in match ${matchId}`);
-        try {
-          await networkManager.connect();
-          await networkManager.setPlayerId(currentPlayer || '', matchId);
-          console.log('Player identification re-established successfully');
-        } catch (err) {
-          console.error('Failed to re-establish player identification:', err);
-          throw new Error('Failed to identify player');
-        }
-      }
-      
-      await endTurn();
-      
-      // Clear selection after ending turn
-      setSelectedUnit(null);
-      setPossibleMoves([]);
-    } catch (error) {
-      console.error('Failed to end turn:', error);
-    } finally {
-      setIsProcessingAction(false);
-    }
-  };
-  
   // Helper function to get the player name based on player ID
   const getPlayerName = (playerId: string) => {
     // Debug: Log available match data
@@ -409,10 +539,168 @@ const GameBoard = ({ gameState, networkManager, currentPlayer, matchId }: GameBo
 
   const isMyTurn = isPlayersTurn();
   
+  // Handle battle completion with better error handling
+  const handleBattleComplete = async (winnerUnit: Unit) => {
+    console.log('Battle completed in GameBoard, winner:', winnerUnit);
+    
+    // Make a local copy of the winner to avoid reference issues
+    const winner = { ...winnerUnit };
+    
+    try {
+      // Update the game state based on battle outcome
+      console.log('Notifying battle manager of completion');
+      arcadeCombatManager.completeBattle(winner);
+      
+      console.log('Waiting briefly before ending turn');
+      // Wait a short time to ensure both clients have processed the battle result
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      console.log('Ending turn after battle completion');
+      // End the turn after the battle is over, with more robust error handling
+      try {
+        await endTurn();
+      } catch (endTurnError) {
+        console.error('Error ending turn after battle:', endTurnError);
+        // If we can't end the turn through the normal flow, don't try to force it
+        // Just clear the battle state and let the game continue
+        console.log('Could not end turn normally, clearing battle state');
+      }
+      
+      // Clear selection and battle state regardless of whether endTurn succeeded
+      setSelectedUnit(null);
+      setPossibleMoves([]);
+      setActiveBattle(null);
+    } catch (error) {
+      console.error('Error completing battle:', error);
+      
+      // Clear battle state and selection to ensure game can continue
+      arcadeCombatManager.completeBattle(winner);
+      setActiveBattle(null);
+      setSelectedUnit(null);
+      setPossibleMoves([]);
+    }
+  };
+  
+  // Render the arcade combat overlay if there's an active battle
+  const renderArcadeCombat = () => {
+    if (!activeBattle) {
+      return null;
+    }
+
+    console.log('Rendering arcade combat with battle state:', {
+      id: activeBattle.id,
+      attackerOwner: activeBattle.attacker?.owner,
+      defenderOwner: activeBattle.defender?.owner,
+      attackerPos: activeBattle.attacker?.position,
+      defenderPos: activeBattle.defender?.position
+    });
+
+    // Validate battle state has required properties
+    const isValidBattle = 
+      activeBattle && 
+      activeBattle.attacker && 
+      activeBattle.defender && 
+      typeof activeBattle.attacker.id === 'string' &&
+      typeof activeBattle.defender.id === 'string' &&
+      activeBattle.attacker.stats &&
+      activeBattle.defender.stats;
+    
+    if (!isValidBattle) {
+      console.error('Invalid battle state detected:', activeBattle);
+      // Auto-end the invalid battle
+      setTimeout(() => {
+        try {
+          // Use the first valid unit as winner, or create a default winner
+          const winner = 
+            (activeBattle.attacker && typeof activeBattle.attacker.id === 'string') ? activeBattle.attacker :
+            (activeBattle.defender && typeof activeBattle.defender.id === 'string') ? activeBattle.defender :
+            {
+              id: 'default-winner',
+              type: 'CHAMPION' as UnitType,
+              position: { x: 0, y: 0 },
+              owner: currentPlayer || 'player1',
+              stats: { health: 100, maxHealth: 100, speed: 5, attack: 10, defense: 5 }
+            };
+          
+          arcadeCombatManager.completeBattle(winner);
+          endTurn().catch(e => console.error('Error ending turn after invalid battle:', e));
+        } catch (error) {
+          console.error('Error handling invalid battle state:', error);
+        }
+      }, 0);
+      
+      // Show error fallback
+      return (
+        <div className="arcade-error-container">
+          <div className="arcade-error-message">
+            There was an error with the combat. The turn will continue.
+          </div>
+          <button
+            onClick={() => {
+              arcadeCombatManager.completeBattle({
+                id: 'default-winner',
+                type: 'CHAMPION' as UnitType,
+                position: { x: 0, y: 0 },
+                owner: currentPlayer || 'player1',
+                stats: { health: 100, maxHealth: 100, speed: 5, attack: 10, defense: 5 }
+              });
+              endTurn().catch(e => console.error('Error ending turn:', e));
+              setActiveBattle(null);
+            }}
+            className="arcade-error-button"
+          >
+            Continue
+          </button>
+        </div>
+      );
+    }
+    
+    // Battle state is valid, render the combat component with error fallback
+    return (
+      <ErrorFallback 
+        fallback={
+          <div className="arcade-error-container">
+            <div className="arcade-error-message">
+              There was an error during combat. The turn will continue.
+            </div>
+            <button
+              onClick={() => {
+                // Clear battle state and try to end turn
+                arcadeCombatManager.completeBattle(activeBattle.attacker);
+                endTurn().catch(e => console.error('Error ending turn:', e));
+                setActiveBattle(null);
+              }}
+              className="arcade-error-button"
+            >
+              Continue
+            </button>
+          </div>
+        }
+      >
+        <ArcadeCombat 
+          battleState={activeBattle}
+          onBattleComplete={handleBattleComplete}
+          currentPlayer={currentPlayer || ''}
+        />
+      </ErrorFallback>
+    );
+  };
+  
   return (
     <div className="game-board-container">
       {errorMessage && (
         <div className="game-error-message">{errorMessage}</div>
+      )}
+      
+      {/* Debug information */}
+      {process.env.NODE_ENV !== 'production' && (
+        <div style={{ position: 'fixed', top: 0, right: 0, backgroundColor: 'rgba(0,0,0,0.7)', color: 'white', padding: '5px', fontSize: '12px', maxWidth: '300px', zIndex: 1000 }}>
+          <div>Active Battle: {activeBattle ? 'Yes' : 'No'}</div>
+          <div>Current Player: {currentPlayer}</div>
+          <div>Current Turn: {getCurrentTurnPlayerId()}</div>
+          <div>Selected Unit: {selectedUnit ? selectedUnit.type : 'None'}</div>
+          <div>Processing: {isProcessingAction ? 'Yes' : 'No'}</div>
+        </div>
       )}
       
       <div className="players-status">
@@ -455,16 +743,95 @@ const GameBoard = ({ gameState, networkManager, currentPlayer, matchId }: GameBo
       </div>
       
       <div className="game-controls">
-        <button
-          className="end-turn-button"
-          onClick={handleEndTurn}
-          disabled={!isPlayersTurn() || !isMatchReady() || isProcessingAction}
-        >
-          End Turn
-        </button>
+        {/* End turn button removed as per requirements */}
+        {isPlayersTurn() && isMatchReady() && (
+          <div className="turn-instructions">
+            Move a unit to automatically end your turn
+          </div>
+        )}
       </div>
+      
+      {/* Use the renderArcadeCombat function */}
+      {renderArcadeCombat()}
     </div>
   );
+};
+
+// Simple error boundary wrapper component
+const ErrorFallback = ({ 
+  children, 
+  fallback 
+}: { 
+  children: React.ReactNode, 
+  fallback: React.ReactNode 
+}) => {
+  const [hasError, setHasError] = useState(false);
+  const [errorDetails, setErrorDetails] = useState<any>(null);
+  const errorHandledRef = useRef(false);
+  
+  // Reset error state when children change
+  useEffect(() => {
+    setHasError(false);
+    setErrorDetails(null);
+    errorHandledRef.current = false;
+  }, [children]);
+  
+  useEffect(() => {
+    const errorHandler = (event: ErrorEvent | Event) => {
+      // Avoid handling the same error multiple times
+      if (errorHandledRef.current) return true;
+      
+      // Extract error details
+      const error = event instanceof ErrorEvent ? event.error : 
+                    (event as any).reason || new Error('Unknown error');
+      
+      console.log('Error caught by ErrorFallback:', error);
+      
+      // Update state
+      setHasError(true);
+      setErrorDetails(error);
+      errorHandledRef.current = true;
+      
+      // Prevent the default error handling
+      if (event.preventDefault) {
+        event.preventDefault();
+      }
+      if (event.stopPropagation) {
+        event.stopPropagation();
+      }
+      
+      return true;
+    };
+    
+    // More specific type handling
+    const errorEventHandler = (event: ErrorEvent) => errorHandler(event);
+    const rejectionHandler = (event: PromiseRejectionEvent) => errorHandler(event);
+    
+    // Listen for both error and unhandledrejection events
+    window.addEventListener('error', errorEventHandler, true);
+    window.addEventListener('unhandledrejection', rejectionHandler, true);
+    
+    return () => {
+      window.removeEventListener('error', errorEventHandler, true);
+      window.removeEventListener('unhandledrejection', rejectionHandler, true);
+    };
+  }, []);
+  
+  // If error info is available, you can log specific details
+  useEffect(() => {
+    if (errorDetails) {
+      console.error('Error details:', errorDetails);
+    }
+  }, [errorDetails]);
+  
+  // React's error boundary component equivalent
+  if (hasError) {
+    console.log('Rendering fallback due to caught error');
+    return <React.Fragment>{fallback}</React.Fragment>;
+  }
+  
+  // No error, render children
+  return <React.Fragment>{children}</React.Fragment>;
 };
 
 export default GameBoard; 
